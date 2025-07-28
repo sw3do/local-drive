@@ -27,7 +27,6 @@ A self-hosted Google Drive alternative built with Rust and Next.js. Store and ma
 - **Next.js 14** (App Router)
 - **TypeScript**
 - **TailwindCSS**
-- **i18next** for internationalization
 
 ## Prerequisites
 
