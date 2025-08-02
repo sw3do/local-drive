@@ -61,7 +61,13 @@ nano .env
 
 ```env
 DATABASE_URL=postgresql://username:password@localhost:5432/localdrive
+
+# Linux/macOS
 STORAGE_PATHS=/path/to/storage1,/path/to/storage2
+
+# Windows (use double backslashes)
+# STORAGE_PATHS=C:\\storage,D:\\storage
+
 PORT=3001
 JWT_SECRET=your-super-secret-jwt-key-here
 ```
@@ -148,7 +154,11 @@ psql -d localdrive -c "UPDATE users SET is_admin = true WHERE email = 'user@exam
 
 ### Single Disk
 ```env
+# Linux/macOS
 STORAGE_PATHS=/home/user/storage
+
+# Windows
+STORAGE_PATHS=C:\\storage
 ```
 
 ### Multiple Disks (Priority Order)
@@ -156,8 +166,8 @@ STORAGE_PATHS=/home/user/storage
 # Linux/macOS
 STORAGE_PATHS=/mnt/disk1,/mnt/disk2,/home/backup
 
-# Windows
-STORAGE_PATHS=C:\storage,D:\storage,E:\backup
+# Windows (use double backslashes)
+STORAGE_PATHS=C:\\storage,D:\\storage,E:\\backup
 ```
 
 Files are automatically distributed across disks when the current disk becomes full.

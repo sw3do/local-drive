@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::io::{Write, Read, Seek, SeekFrom};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
+use sysinfo::Disks;
 use crate::models::{DiskInfo, StorageInfo, StorageResult, TempFilesInfo, CleanupResult};
 use crate::config::Config;
 
@@ -28,13 +29,74 @@ impl FileStorage {
     }
     
     fn normalize_path(path: &Path) -> anyhow::Result<PathBuf> {
-        if cfg!(target_os = "windows") {
-            let path_str = path.to_string_lossy();
-            let normalized = path_str.replace('/', "\\\\")
-                .trim_end_matches('\\').to_string();
-            Ok(PathBuf::from(normalized))
+        let absolute_path = if path.is_absolute() {
+            path.to_path_buf()
         } else {
-            Ok(path.to_path_buf())
+            std::env::current_dir()?.join(path)
+        };
+        
+        if cfg!(target_os = "windows") {
+            let mut path_str = absolute_path.to_string_lossy().to_string();
+            
+            if path_str.starts_with("\\\\?\\") {
+                path_str = path_str.strip_prefix("\\\\?\\").unwrap_or(&path_str).to_string();
+            }
+            
+            let normalized_str = path_str.replace('/', "\\")
+                .trim_end_matches('\\').to_string();
+            let normalized_path = PathBuf::from(normalized_str);
+            
+            if normalized_path.exists() {
+                match normalized_path.canonicalize() {
+                    Ok(mut canonical) => {
+                        let canonical_str = canonical.to_string_lossy().to_string();
+                        if canonical_str.starts_with("\\\\?\\") {
+                            canonical = PathBuf::from(canonical_str.strip_prefix("\\\\?\\").unwrap_or(&canonical_str));
+                        }
+                        Ok(canonical)
+                    },
+                    Err(_) => Ok(normalized_path)
+                }
+            } else {
+                if let Some(parent) = normalized_path.parent() {
+                    if parent.exists() {
+                        match parent.canonicalize() {
+                            Ok(mut canonical_parent) => {
+                                let canonical_str = canonical_parent.to_string_lossy().to_string();
+                                if canonical_str.starts_with("\\\\?\\") {
+                                    canonical_parent = PathBuf::from(canonical_str.strip_prefix("\\\\?\\").unwrap_or(&canonical_str));
+                                }
+                                Ok(canonical_parent.join(normalized_path.file_name().unwrap_or_default()))
+                            }
+                            Err(_) => Ok(normalized_path)
+                        }
+                    } else {
+                        Ok(normalized_path)
+                    }
+                } else {
+                    Ok(normalized_path)
+                }
+            }
+        } else {
+            match absolute_path.canonicalize() {
+                Ok(canonical) => Ok(canonical),
+                Err(_) => {
+                    if let Some(parent) = absolute_path.parent() {
+                        if parent.exists() {
+                            match parent.canonicalize() {
+                                Ok(canonical_parent) => {
+                                    Ok(canonical_parent.join(absolute_path.file_name().unwrap_or_default()))
+                                }
+                                Err(_) => Ok(absolute_path)
+                            }
+                        } else {
+                            Ok(absolute_path)
+                        }
+                    } else {
+                        Ok(absolute_path)
+                    }
+                }
+            }
         }
     }
     
@@ -50,18 +112,11 @@ impl FileStorage {
     }
     
     fn get_single_disk_info(&self, path: &Path, _index: usize) -> anyhow::Result<DiskInfo> {
-        let canonical_path = match path.canonicalize() {
-            Ok(p) => p,
-            Err(_) => path.to_path_buf(),
-        };
+        let normalized_path = Self::normalize_path(path)?;
         
-        let metadata = fs::metadata(&canonical_path).or_else(|_| fs::metadata(path))?;
+        let metadata = fs::metadata(&normalized_path).or_else(|_| fs::metadata(path))?;
         
-        let (total_space, available_space) = if cfg!(target_os = "windows") {
-            self.get_windows_disk_space(&canonical_path)?
-        } else {
-            self.get_unix_disk_space(&canonical_path)?
-        };
+        let (total_space, available_space) = self.get_disk_space_sysinfo(&normalized_path)?;
         
         let used_space = total_space.saturating_sub(available_space);
         let usage_percentage = if total_space > 0 {
@@ -70,14 +125,49 @@ impl FileStorage {
             0
         };
         
+        let display_path = if cfg!(target_os = "windows") {
+            let path_str = normalized_path.to_string_lossy().to_string();
+            if path_str.starts_with("\\\\?\\") {
+                path_str.strip_prefix("\\\\?\\").unwrap_or(&path_str).to_string()
+            } else {
+                path_str
+            }
+        } else {
+            normalized_path.to_string_lossy().to_string()
+        };
+        
         Ok(DiskInfo {
-            path: canonical_path.to_string_lossy().to_string(),
+            path: display_path,
             total_space,
             used_space,
             available_space,
             usage_percentage,
-            is_accessible: canonical_path.exists() && metadata.is_dir(),
+            is_accessible: normalized_path.exists() && metadata.is_dir(),
         })
+    }
+    
+    fn get_disk_space_sysinfo(&self, path: &Path) -> anyhow::Result<(u64, u64)> {
+        let disks = Disks::new_with_refreshed_list();
+        let path_str = path.to_string_lossy();
+        
+        let mut best_match: Option<&sysinfo::Disk> = None;
+        let mut best_match_len = 0;
+        
+        for disk in &disks {
+            let mount_point = disk.mount_point().to_string_lossy();
+            if path_str.starts_with(&*mount_point) && mount_point.len() > best_match_len {
+                best_match = Some(disk);
+                best_match_len = mount_point.len();
+            }
+        }
+        
+        if let Some(disk) = best_match {
+            let total_space = disk.total_space();
+            let available_space = disk.available_space();
+            Ok((total_space, available_space))
+        } else {
+            Err(anyhow::anyhow!("Could not find disk information for path: {}", path_str))
+        }
     }
     
     #[cfg(target_os = "windows")]
