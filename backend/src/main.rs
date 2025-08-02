@@ -253,10 +253,13 @@ async fn delete_file(
     Path(file_id): Path<Uuid>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, StatusCode> {
-    let _file = database::get_file_by_id(&state.db, &file_id)
+    let file = database::get_file_by_id(&state.db, &file_id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
+
+    state.file_storage.delete_file(&file.file_path)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     database::delete_file_record(&state.db, &file_id)
         .await
