@@ -86,7 +86,7 @@ impl FileStorage {
         use std::os::windows::ffi::OsStrExt;
         use winapi::um::fileapi::GetDiskFreeSpaceExW;
         use winapi::shared::minwindef::BOOL;
-        use winapi::shared::basetsd::ULARGE_INTEGER;
+        use winapi::um::winnt::ULARGE_INTEGER;
         
         let path_str = path.to_string_lossy();
         let path_wide: Vec<u16> = OsStr::new(path_str.as_ref())
