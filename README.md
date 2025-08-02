@@ -8,6 +8,7 @@ A self-hosted Google Drive alternative built with Rust and Next.js. Store and ma
 - 💾 **Multi-disk support** - Automatically distribute files across multiple storage devices
 - 🔐 **Secure authentication** - JWT-based auth with Argon2 password hashing
 - 📤 **Chunked uploads** - Support for large file uploads with progress tracking
+- 🧹 **Automatic cleanup** - Smart temporary file management with scheduled cleanup
 - 🌐 **Modern UI** - Clean, responsive interface built with Next.js and TailwindCSS
 - 👥 **User management** - Admin panel for managing users and monitoring storage
 - 🔗 **File sharing** - Generate shareable links with permissions
@@ -265,6 +266,34 @@ server {
 }
 ```
 
+## API Endpoints
+
+### Authentication
+- `POST /auth/login` - User login
+
+### File Management
+- `GET /files` - List user files
+- `GET /files/:id/download` - Download file
+- `DELETE /files/:id` - Delete file
+
+### Chunked Upload
+- `POST /upload/initiate` - Start chunked upload
+- `POST /upload/:upload_id/chunk/:chunk_number` - Upload chunk
+- `POST /upload/:upload_id/complete` - Complete upload
+- `GET /upload/:upload_id/status` - Get upload status
+- `DELETE /upload/:upload_id/cancel` - Cancel upload
+
+### Admin Routes
+- `GET /admin/users` - List all users
+- `GET /admin/storage` - Get storage information
+- `GET /admin/storage/report` - Get detailed disk usage report
+- `GET /admin/temp/info` - Get temporary files information
+- `POST /admin/temp/cleanup` - Clean orphaned temp files (24h+)
+- `POST /admin/temp/cleanup/:hours` - Clean temp files older than specified hours
+
+### Storage Information
+- `GET /user/storage` - Get user storage info
+
 ## Configuration Options
 
 ### Backend Environment Variables
@@ -305,6 +334,11 @@ server {
    - Check MAX_FILE_SIZE setting
    - Verify available disk space
    - Check network connectivity
+
+4. **Temporary files accumulating**
+   - Automatic cleanup runs every 6 hours
+   - Manual cleanup via `/admin/temp/cleanup` endpoint
+   - Check temp directory permissions
 
 ### Logs
 

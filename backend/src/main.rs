@@ -15,6 +15,7 @@ use tower_http::limit::RequestBodyLimitLayer;
 use tracing::info;
 use uuid::Uuid;
 use clap::{Parser, Subcommand};
+use tokio_cron_scheduler::{JobScheduler, Job};
 
 mod auth;
 mod config;
@@ -75,6 +76,23 @@ async fn main() -> anyhow::Result<()> {
     let file_storage = Arc::new(file_storage::FileStorage::new(&config)?);
     let state = AppState { db, config: config.clone(), file_storage };
 
+    let scheduler = JobScheduler::new().await?;
+    let file_storage_clone = state.file_storage.clone();
+    
+    let cleanup_job = Job::new_async("0 0 */6 * * *", move |_uuid, _l| {
+        let file_storage = file_storage_clone.clone();
+        Box::pin(async move {
+            if let Ok(count) = file_storage.cleanup_orphaned_temp_files() {
+                info!("Automatic temp cleanup: {} files removed", count);
+            }
+        })
+    })?;
+    
+    scheduler.add(cleanup_job).await?;
+    scheduler.start().await?;
+    
+    info!("Automatic temp file cleanup scheduled (every 6 hours)");
+
     let protected_routes = Router::new()
         .route("/files", get(list_files))
         .route("/files/:id/download", get(download_file))
@@ -90,6 +108,10 @@ async fn main() -> anyhow::Result<()> {
     let admin_routes = Router::new()
         .route("/admin/users", get(list_users))
         .route("/admin/storage", get(get_storage_info))
+        .route("/admin/storage/report", get(get_disk_usage_report))
+        .route("/admin/temp/info", get(get_temp_files_info))
+        .route("/admin/temp/cleanup", post(cleanup_temp_files))
+        .route("/admin/temp/cleanup/:hours", post(cleanup_temp_files_with_age))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::admin_middleware));
 
     let app = Router::new()
@@ -435,4 +457,46 @@ async fn cancel_chunked_upload(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_disk_usage_report(
+    State(state): State<AppState>,
+) -> Result<String, StatusCode> {
+    let report = state.file_storage.get_disk_usage_report()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    Ok(report)
+}
+
+async fn get_temp_files_info(
+    State(state): State<AppState>,
+) -> Result<String, StatusCode> {
+    state.file_storage
+        .get_temp_files_info()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+async fn cleanup_temp_files(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    match state.file_storage.cleanup_orphaned_temp_files() {
+        Ok(count) => Ok(Json(serde_json::json!({
+            "message": "Temp files cleaned successfully",
+            "cleaned_files": count
+        }))),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR)
+    }
+}
+
+async fn cleanup_temp_files_with_age(
+    Path(hours): Path<u64>,
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    match state.file_storage.cleanup_old_temp_files(hours) {
+        Ok(count) => Ok(Json(serde_json::json!({
+            "message": format!("Temp files older than {} hours cleaned successfully", hours),
+            "cleaned_files": count
+        }))),
+        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR)
+    }
 }

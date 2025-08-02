@@ -24,6 +24,7 @@ tempfile = "3.0"
 fs_extra = "1.3"
 libc = "0.2"
 clap = { version = "4.0", features = ["derive"] }
+tokio-cron-scheduler = "0.10"
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3", features = ["fileapi"] }
+winapi = { version = "0.3", features = ["fileapi", "minwindef"] }
