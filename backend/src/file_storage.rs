@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::io::{Write, Read, Seek, SeekFrom};
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
-use crate::models::{DiskInfo, StorageInfo, StorageResult};
+use crate::models::{DiskInfo, StorageInfo, StorageResult, TempFilesInfo, CleanupResult};
 use crate::config::Config;
 
 pub struct FileStorage {
@@ -86,15 +86,17 @@ impl FileStorage {
         use std::os::windows::ffi::OsStrExt;
         use winapi::um::fileapi::GetDiskFreeSpaceExW;
         use winapi::shared::minwindef::BOOL;
+        use winapi::shared::basetsd::ULARGE_INTEGER;
         
-        let path_wide: Vec<u16> = OsStr::new(&path.to_string_lossy())
+        let path_str = path.to_string_lossy();
+        let path_wide: Vec<u16> = OsStr::new(path_str.as_ref())
             .encode_wide()
             .chain(std::iter::once(0))
             .collect();
         
-        let mut free_bytes_available = 0u64;
-        let mut total_number_of_bytes = 0u64;
-        let mut total_number_of_free_bytes = 0u64;
+        let mut free_bytes_available: ULARGE_INTEGER = unsafe { std::mem::zeroed() };
+        let mut total_number_of_bytes: ULARGE_INTEGER = unsafe { std::mem::zeroed() };
+        let mut total_number_of_free_bytes: ULARGE_INTEGER = unsafe { std::mem::zeroed() };
         
         let result: BOOL = unsafe {
             GetDiskFreeSpaceExW(
@@ -109,7 +111,10 @@ impl FileStorage {
             return Err(anyhow::anyhow!("Failed to get disk space information for Windows"));
         }
         
-        Ok((total_number_of_bytes, free_bytes_available))
+        let total_bytes = unsafe { *total_number_of_bytes.QuadPart() } as u64;
+        let free_bytes = unsafe { *free_bytes_available.QuadPart() } as u64;
+        
+        Ok((total_bytes, free_bytes))
     }
     
     #[cfg(not(target_os = "windows"))]
@@ -404,8 +409,9 @@ impl FileStorage {
         Ok(bytes_read == expected_size)
     }
 
-    pub fn cleanup_old_temp_files(&self, max_age_hours: u64) -> anyhow::Result<usize> {
+    pub fn cleanup_old_temp_files(&self, max_age_hours: u64) -> anyhow::Result<CleanupResult> {
         let mut cleaned_count = 0;
+        let mut freed_space = 0u64;
         let current_time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
         let max_age_seconds = max_age_hours * 3600;
 
@@ -415,14 +421,20 @@ impl FileStorage {
                 continue;
             }
 
-            cleaned_count += self.cleanup_temp_directory(&temp_dir, current_time, max_age_seconds)?;
+            let (count, space) = self.cleanup_temp_directory(&temp_dir, current_time, max_age_seconds)?;
+            cleaned_count += count;
+            freed_space += space;
         }
 
-        Ok(cleaned_count)
+        Ok(CleanupResult {
+            cleaned_files: cleaned_count,
+            freed_space,
+        })
     }
 
-    fn cleanup_temp_directory(&self, temp_dir: &Path, current_time: u64, max_age_seconds: u64) -> anyhow::Result<usize> {
+    fn cleanup_temp_directory(&self, temp_dir: &Path, current_time: u64, max_age_seconds: u64) -> anyhow::Result<(usize, u64)> {
         let mut cleaned_count = 0;
+        let mut freed_space = 0u64;
 
         if let Ok(entries) = fs::read_dir(temp_dir) {
             for entry in entries {
@@ -430,7 +442,9 @@ impl FileStorage {
                     let path = entry.path();
                     
                     if path.is_dir() {
-                        cleaned_count += self.cleanup_temp_directory(&path, current_time, max_age_seconds)?;
+                        let (count, space) = self.cleanup_temp_directory(&path, current_time, max_age_seconds)?;
+                        cleaned_count += count;
+                        freed_space += space;
                         
                         if let Ok(entries) = fs::read_dir(&path) {
                             if entries.count() == 0 {
@@ -439,6 +453,7 @@ impl FileStorage {
                         }
                     } else if path.extension().and_then(|s| s.to_str()) == Some("tmp") {
                         if let Ok(metadata) = entry.metadata() {
+                            let file_size = metadata.len();
                             if let Ok(modified) = metadata.modified() {
                                 if let Ok(modified_time) = modified.duration_since(UNIX_EPOCH) {
                                     let file_age = current_time.saturating_sub(modified_time.as_secs());
@@ -446,6 +461,7 @@ impl FileStorage {
                                     if file_age > max_age_seconds {
                                         if fs::remove_file(&path).is_ok() {
                                             cleaned_count += 1;
+                                            freed_space += file_size;
                                         }
                                     }
                                 }
@@ -456,49 +472,53 @@ impl FileStorage {
             }
         }
 
-        Ok(cleaned_count)
+        Ok((cleaned_count, freed_space))
     }
 
-    pub fn cleanup_orphaned_temp_files(&self) -> anyhow::Result<usize> {
+    pub fn cleanup_orphaned_temp_files(&self) -> anyhow::Result<CleanupResult> {
         self.cleanup_old_temp_files(24)
     }
 
-    pub fn get_temp_files_info(&self) -> anyhow::Result<String> {
-        let mut report = String::new();
+    pub fn get_temp_files_info(&self) -> anyhow::Result<TempFilesInfo> {
         let mut total_files = 0;
         let mut total_size = 0u64;
+        let mut oldest_file_age_hours: Option<f64> = None;
         let current_time = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs();
 
-        for (index, storage_path) in self.storage_paths.iter().enumerate() {
+        for storage_path in &self.storage_paths {
             let temp_dir = storage_path.join("temp");
             if !temp_dir.exists() {
                 continue;
             }
 
-            let (files, size) = self.scan_temp_directory(&temp_dir, current_time)?;
+            let (files, size, oldest_age) = self.scan_temp_directory_with_age(&temp_dir, current_time)?;
             total_files += files;
             total_size += size;
-
-            report.push_str(&format!(
-                "Disk {}: {} temp files, {:.2} MB\n",
-                index + 1,
-                files,
-                size as f64 / 1024.0 / 1024.0
-            ));
+            
+            if let Some(age) = oldest_age {
+                oldest_file_age_hours = Some(match oldest_file_age_hours {
+                    Some(current_oldest) => current_oldest.max(age),
+                    None => age,
+                });
+            }
         }
 
-        report.push_str(&format!(
-            "\nTotal: {} temp files, {:.2} MB",
+        Ok(TempFilesInfo {
             total_files,
-            total_size as f64 / 1024.0 / 1024.0
-        ));
-
-        Ok(report)
+            total_size,
+            oldest_file_age_hours,
+        })
     }
 
     fn scan_temp_directory(&self, temp_dir: &Path, current_time: u64) -> anyhow::Result<(usize, u64)> {
+        let (file_count, total_size, _) = self.scan_temp_directory_with_age(temp_dir, current_time)?;
+        Ok((file_count, total_size))
+    }
+
+    fn scan_temp_directory_with_age(&self, temp_dir: &Path, current_time: u64) -> anyhow::Result<(usize, u64, Option<f64>)> {
         let mut file_count = 0;
         let mut total_size = 0u64;
+        let mut oldest_age_hours: Option<f64> = None;
 
         if let Ok(entries) = fs::read_dir(temp_dir) {
             for entry in entries {
@@ -506,19 +526,38 @@ impl FileStorage {
                     let path = entry.path();
                     
                     if path.is_dir() {
-                        let (sub_files, sub_size) = self.scan_temp_directory(&path, current_time)?;
+                        let (sub_files, sub_size, sub_oldest) = self.scan_temp_directory_with_age(&path, current_time)?;
                         file_count += sub_files;
                         total_size += sub_size;
+                        
+                        if let Some(age) = sub_oldest {
+                            oldest_age_hours = Some(match oldest_age_hours {
+                                Some(current_oldest) => current_oldest.max(age),
+                                None => age,
+                            });
+                        }
                     } else if path.extension().and_then(|s| s.to_str()) == Some("tmp") {
                         file_count += 1;
                         if let Ok(metadata) = entry.metadata() {
                             total_size += metadata.len();
+                            
+                            if let Ok(modified) = metadata.modified() {
+                                if let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH) {
+                                    let file_age_seconds = current_time.saturating_sub(duration.as_secs());
+                                    let file_age_hours = file_age_seconds as f64 / 3600.0;
+                                    
+                                    oldest_age_hours = Some(match oldest_age_hours {
+                                        Some(current_oldest) => current_oldest.max(file_age_hours),
+                                        None => file_age_hours,
+                                    });
+                                }
+                            }
                         }
                     }
                 }
             }
         }
 
-        Ok((file_count, total_size))
+        Ok((file_count, total_size, oldest_age_hours))
     }
 }

@@ -326,6 +326,17 @@ export const filesApi = {
   },
 };
 
+export interface TempFilesInfo {
+  total_files: number;
+  total_size: number;
+  oldest_file_age_hours?: number;
+}
+
+export interface CleanupResult {
+  cleaned_files: number;
+  freed_space: number;
+}
+
 export const adminApi = {
   getUsers: async (): Promise<User[]> => {
     const response = await api.get('/admin/users');
@@ -334,6 +345,21 @@ export const adminApi = {
 
   getStorageInfo: async (): Promise<StorageInfo> => {
     const response = await api.get('/admin/storage');
+    return response.data;
+  },
+
+  getTempFilesInfo: async (): Promise<TempFilesInfo> => {
+    const response = await api.get('/admin/temp/info');
+    return response.data;
+  },
+
+  cleanupTempFiles: async (): Promise<CleanupResult> => {
+    const response = await api.post('/admin/temp/cleanup');
+    return response.data;
+  },
+
+  cleanupTempFilesWithAge: async (hours: number): Promise<CleanupResult> => {
+    const response = await api.post(`/admin/temp/cleanup/${hours}`);
     return response.data;
   },
 };

@@ -27,4 +27,4 @@ clap = { version = "4.0", features = ["derive"] }
 tokio-cron-scheduler = "0.10"
 
 [target.'cfg(windows)'.dependencies]
-winapi = { version = "0.3", features = ["fileapi", "minwindef"] }
+winapi = { version = "0.3", features = ["fileapi", "minwindef", "basetsd"] }

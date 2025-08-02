@@ -114,3 +114,16 @@ pub struct ChunkInfo {
     pub chunk_number: i32,
     pub is_uploaded: bool,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct TempFilesInfo {
+    pub total_files: usize,
+    pub total_size: u64,
+    pub oldest_file_age_hours: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct CleanupResult {
+    pub cleaned_files: usize,
+    pub freed_space: u64,
+}

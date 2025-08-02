@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useAuthStore } from '@/store/auth';
-import { adminApi, User, StorageInfo } from '@/lib/api';
+import { adminApi, User, StorageInfo, TempFilesInfo } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 import { useRouter } from 'next/navigation';
@@ -14,7 +14,10 @@ import { ArrowLeft } from 'lucide-react';
 export default function AdminPage() {
   const [users, setUsers] = useState<User[]>([]);
   const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null);
+  const [tempFilesInfo, setTempFilesInfo] = useState<TempFilesInfo | null>(null);
   const [loading, setLoading] = useState(true);
+  const [cleanupLoading, setCleanupLoading] = useState(false);
+  const [customHours, setCustomHours] = useState<string>('24');
   const { user, isAuthenticated, initializeAuth, isLoading: authLoading } = useAuthStore();
   const router = useRouter();
   const [authInitialized, setAuthInitialized] = useState(false);
@@ -35,12 +38,14 @@ export default function AdminPage() {
     if (isAuthenticated && user?.is_admin && !authLoading) {
       const fetchData = async () => {
         try {
-          const [usersData, storageData] = await Promise.all([
+          const [usersData, storageData, tempData] = await Promise.all([
             adminApi.getUsers(),
             adminApi.getStorageInfo(),
+            adminApi.getTempFilesInfo(),
           ]);
           setUsers(usersData);
           setStorageInfo(storageData);
+          setTempFilesInfo(tempData);
         } catch (error) {
           console.error('Failed to fetch admin data:', error);
         } finally {
@@ -58,6 +63,30 @@ export default function AdminPage() {
     const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  const handleCleanupTempFiles = async (hours?: number) => {
+    setCleanupLoading(true);
+    try {
+      let result;
+      if (hours) {
+        result = await adminApi.cleanupTempFilesWithAge(hours);
+      } else {
+        result = await adminApi.cleanupTempFiles();
+      }
+      
+      const sizeInMB = (result.freed_space / (1024 * 1024)).toFixed(2);
+      alert(`Cleanup completed: ${result.cleaned_files} files removed, ${sizeInMB} MB freed`);
+      
+      // Refresh temp files info
+      const tempInfo = await adminApi.getTempFilesInfo();
+      setTempFilesInfo(tempInfo);
+    } catch (error) {
+      console.error('Cleanup failed:', error);
+      alert('Cleanup failed');
+    } finally {
+      setCleanupLoading(false);
+    }
   };
 
   if (loading) {
@@ -176,6 +205,76 @@ export default function AdminPage() {
                       </div>
                     </div>
                   ))}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+        
+        {/* Temporary Files Management */}
+        <div className="bg-card rounded-lg border border-border p-4 sm:p-6 xl:col-span-2">
+          <h2 className="text-lg sm:text-xl font-semibold mb-4">Temporary Files Management</h2>
+          {tempFilesInfo && (
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="bg-muted p-3 sm:p-4 rounded">
+                  <div className="text-sm text-muted-foreground">Total Temp Files</div>
+                  <div className="text-lg sm:text-2xl font-bold">{tempFilesInfo.total_files}</div>
+                </div>
+                <div className="bg-muted p-3 sm:p-4 rounded">
+                  <div className="text-sm text-muted-foreground">Total Size</div>
+                  <div className="text-lg sm:text-2xl font-bold">{formatBytes(tempFilesInfo.total_size)}</div>
+                </div>
+                <div className="bg-muted p-3 sm:p-4 rounded">
+                  <div className="text-sm text-muted-foreground">Oldest File Age</div>
+                  <div className="text-lg sm:text-2xl font-bold">
+                    {tempFilesInfo.oldest_file_age_hours ? `${tempFilesInfo.oldest_file_age_hours.toFixed(1)}h` : 'N/A'}
+                  </div>
+                </div>
+              </div>
+              
+              <div className="border-t border-border pt-4">
+                <h3 className="text-base sm:text-lg font-medium mb-3">Cleanup Actions</h3>
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <Button 
+                    onClick={() => handleCleanupTempFiles()}
+                    disabled={cleanupLoading}
+                    className="flex-1"
+                  >
+                    {cleanupLoading ? (
+                      <>
+                        <Spinner size="sm" className="mr-2" />
+                        Cleaning...
+                      </>
+                    ) : (
+                      'Cleanup Old Files (24h+)'
+                    )}
+                  </Button>
+                  
+                  <div className="flex flex-col sm:flex-row gap-2 flex-1">
+                    <input
+                      type="number"
+                      value={customHours}
+                      onChange={(e) => setCustomHours(e.target.value)}
+                      placeholder="Hours"
+                      min="1"
+                      className="px-3 py-2 border border-border rounded text-sm flex-1"
+                    />
+                    <Button 
+                      onClick={() => handleCleanupTempFiles(parseInt(customHours))}
+                      disabled={cleanupLoading || !customHours || parseInt(customHours) < 1}
+                      variant="outline"
+                      className="flex-1"
+                    >
+                      Custom Cleanup
+                    </Button>
+                  </div>
+                </div>
+                
+                <div className="mt-3 text-xs text-muted-foreground">
+                  <p>• Automatic cleanup runs every 6 hours for files older than 24 hours</p>
+                  <p>• Manual cleanup allows you to specify custom age threshold</p>
+                  <p>• Only temporary upload files (.tmp) are affected</p>
                 </div>
               </div>
             </div>

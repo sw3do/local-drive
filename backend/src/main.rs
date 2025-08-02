@@ -82,8 +82,8 @@ async fn main() -> anyhow::Result<()> {
     let cleanup_job = Job::new_async("0 0 */6 * * *", move |_uuid, _l| {
         let file_storage = file_storage_clone.clone();
         Box::pin(async move {
-            if let Ok(count) = file_storage.cleanup_orphaned_temp_files() {
-                info!("Automatic temp cleanup: {} files removed", count);
+            if let Ok(result) = file_storage.cleanup_orphaned_temp_files() {
+                info!("Automatic temp cleanup: {} files removed, {} bytes freed", result.cleaned_files, result.freed_space);
             }
         })
     })?;
@@ -470,33 +470,26 @@ async fn get_disk_usage_report(
 
 async fn get_temp_files_info(
     State(state): State<AppState>,
-) -> Result<String, StatusCode> {
-    state.file_storage
+) -> Result<Json<models::TempFilesInfo>, StatusCode> {
+    let temp_info = state.file_storage
         .get_temp_files_info()
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(temp_info))
 }
 
 async fn cleanup_temp_files(
     State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    match state.file_storage.cleanup_orphaned_temp_files() {
-        Ok(count) => Ok(Json(serde_json::json!({
-            "message": "Temp files cleaned successfully",
-            "cleaned_files": count
-        }))),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR)
-    }
+) -> Result<Json<models::CleanupResult>, StatusCode> {
+    let result = state.file_storage.cleanup_orphaned_temp_files()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(result))
 }
 
 async fn cleanup_temp_files_with_age(
     Path(hours): Path<u64>,
     State(state): State<AppState>,
-) -> Result<Json<serde_json::Value>, StatusCode> {
-    match state.file_storage.cleanup_old_temp_files(hours) {
-        Ok(count) => Ok(Json(serde_json::json!({
-            "message": format!("Temp files older than {} hours cleaned successfully", hours),
-            "cleaned_files": count
-        }))),
-        Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR)
-    }
+) -> Result<Json<models::CleanupResult>, StatusCode> {
+    let result = state.file_storage.cleanup_old_temp_files(hours)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(result))
 }
