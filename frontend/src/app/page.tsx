@@ -18,7 +18,9 @@ import {
   Grid3X3,
   List,
   Menu,
-  X
+  X,
+  RotateCcw,
+  Trash
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -46,11 +48,13 @@ export default function Dashboard() {
   const { user, isAuthenticated, logout, initializeAuth, isLoading: authLoading } = useAuthStore();
   const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null);
   const [files, setFiles] = useState<FileInfo[]>([]);
+  const [trashFiles, setTrashFiles] = useState<FileInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [authInitialized, setAuthInitialized] = useState(false);
   const [showChunkedUpload, setShowChunkedUpload] = useState(false);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState<'files' | 'trash'>('files');
 
   useEffect(() => {
     initializeAuth();
@@ -68,12 +72,14 @@ export default function Dashboard() {
     if (isAuthenticated && !authLoading) {
       const fetchData = async () => {
         try {
-          const [storageData, filesData] = await Promise.all([
+          const [storageData, filesData, trashData] = await Promise.all([
             filesApi.getUserStorageInfo(),
-            filesApi.getFiles()
+            filesApi.getFiles(),
+            filesApi.getTrashFiles()
           ]);
           setStorageInfo(storageData);
           setFiles(filesData);
+          setTrashFiles(trashData);
         } catch (error) {
           console.error('Failed to fetch data:', error);
         } finally {
@@ -101,25 +107,40 @@ export default function Dashboard() {
   const handleDelete = async (fileId: string) => {
     try {
       await filesApi.deleteFile(fileId);
-      // Refresh files list
-      const filesData = await filesApi.getFiles();
-      setFiles(filesData);
-      // Refresh storage info
-      const storageData = await filesApi.getUserStorageInfo();
-      setStorageInfo(storageData);
+      await refreshData();
     } catch (error) {
-      console.error('Failed to delete file:', error);
+      console.error('Failed to move file to trash:', error);
+    }
+  };
+
+  const handleRestore = async (fileId: string) => {
+    try {
+      await filesApi.restoreFile(fileId);
+      await refreshData();
+    } catch (error) {
+      console.error('Failed to restore file:', error);
+    }
+  };
+
+  const handlePermanentDelete = async (fileId: string) => {
+    try {
+      await filesApi.deleteFilePermanently(fileId);
+      await refreshData();
+    } catch (error) {
+      console.error('Failed to permanently delete file:', error);
     }
   };
 
   const refreshData = async () => {
     try {
-      const [storageData, filesData] = await Promise.all([
+      const [storageData, filesData, trashData] = await Promise.all([
         filesApi.getUserStorageInfo(),
-        filesApi.getFiles()
+        filesApi.getFiles(),
+        filesApi.getTrashFiles()
       ]);
       setStorageInfo(storageData);
       setFiles(filesData);
+      setTrashFiles(trashData);
     } catch (error) {
       console.error('Failed to refresh data:', error);
     }
@@ -223,6 +244,31 @@ export default function Dashboard() {
             </Button>
           </div>
           
+          <div className="mt-6 space-y-1">
+            <Button
+              variant={activeTab === 'files' ? 'secondary' : 'ghost'}
+              className="w-full justify-start"
+              onClick={() => {
+                setActiveTab('files');
+                setSidebarOpen(false);
+              }}
+            >
+              <File className="mr-2 h-4 w-4" />
+              My Files
+            </Button>
+            <Button
+              variant={activeTab === 'trash' ? 'secondary' : 'ghost'}
+              className="w-full justify-start"
+              onClick={() => {
+                setActiveTab('trash');
+                setSidebarOpen(false);
+              }}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              Trash ({trashFiles.length})
+            </Button>
+          </div>
+          
           <div className="mt-8">
             <div className="rounded-lg bg-muted p-4">
               <h3 className="text-sm font-medium">Storage</h3>
@@ -263,9 +309,14 @@ export default function Dashboard() {
           <div className="mb-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div>
-                <h2 className="text-xl sm:text-2xl font-semibold">Dosyalarım</h2>
+                <h2 className="text-xl sm:text-2xl font-semibold">
+                  {activeTab === 'files' ? 'Dosyalarım' : 'Çöp Kutusu'}
+                </h2>
                 <p className="text-muted-foreground mt-1 sm:mt-2">
-                  {files.length} dosya bulundu
+                  {activeTab === 'files' 
+                    ? `${files.length} dosya bulundu`
+                    : `${trashFiles.length} silinmiş dosya`
+                  }
                 </p>
               </div>
               <div className="flex items-center space-x-2">
@@ -287,104 +338,203 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {files.length === 0 ? (
-            <div className="flex h-64 items-center justify-center border-2 border-dashed border-border rounded-lg">
-              <div className="text-center px-4">
-                <File className="mx-auto h-12 w-12 text-muted-foreground" />
-                <h3 className="mt-4 text-lg font-medium">Henüz dosya yok</h3>
-                <p className="mt-2 text-muted-foreground text-sm sm:text-base">
-                  Dosya yüklemek için {window.innerWidth < 1024 ? 'menüdeki' : 'kenar çubuğundaki'} &quot;Upload Files&quot; butonuna tıklayın
-                </p>
-                <Button 
-                  className="mt-4 lg:hidden" 
-                  onClick={() => setShowChunkedUpload(true)}
-                >
-                  <Upload className="mr-2 h-4 w-4" />
-                  Upload Files
-                </Button>
+          {activeTab === 'files' ? (
+            files.length === 0 ? (
+              <div className="flex h-64 items-center justify-center border-2 border-dashed border-border rounded-lg">
+                <div className="text-center px-4">
+                  <File className="mx-auto h-12 w-12 text-muted-foreground" />
+                  <h3 className="mt-4 text-lg font-medium">Henüz dosya yok</h3>
+                  <p className="mt-2 text-muted-foreground text-sm sm:text-base">
+                    Dosya yüklemek için {typeof window !== 'undefined' && window.innerWidth < 1024 ? 'menüdeki' : 'kenar çubuğundaki'} &quot;Upload Files&quot; butonuna tıklayın
+                  </p>
+                  <Button 
+                    className="mt-4 lg:hidden" 
+                    onClick={() => setShowChunkedUpload(true)}
+                  >
+                    <Upload className="mr-2 h-4 w-4" />
+                    Upload Files
+                  </Button>
+                </div>
               </div>
-            </div>
-          ) : (
-            <div className={viewMode === 'grid' ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3 sm:gap-4' : 'space-y-2'}>
-              {files.map((file) => (
-                viewMode === 'grid' ? (
-                  <div key={file.id} className="border border-border rounded-lg p-3 sm:p-4 hover:bg-muted/50 transition-colors">
-                    <div className="flex items-start justify-between mb-3">
-                      <File className="h-6 w-6 sm:h-8 sm:w-8 text-primary flex-shrink-0" />
-                      <div className="flex space-x-1">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7 sm:h-8 sm:w-8"
-                          onClick={() => handleDownload(file.id)}
-                        >
-                          <Download className="h-3 w-3 sm:h-4 sm:w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7 sm:h-8 sm:w-8 text-destructive hover:text-destructive"
-                          onClick={() => handleDelete(file.id)}
-                        >
-                          <Trash2 className="h-3 w-3 sm:h-4 sm:w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                    <div>
-                      <h3 className="font-medium text-xs sm:text-sm truncate" title={file.original_filename}>
-                        {file.original_filename}
-                      </h3>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        {formatFileSize(file.file_size)}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {formatDate(file.created_at)}
-                      </p>
-                      {file.mime_type && (
-                        <p className="text-xs text-muted-foreground truncate">
-                          {file.mime_type}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <div key={file.id} className="flex items-center justify-between p-3 border border-border rounded-lg hover:bg-muted/50 transition-colors">
-                    <div className="flex items-center space-x-3 min-w-0 flex-1">
-                      <File className="h-4 w-4 sm:h-5 sm:w-5 text-primary flex-shrink-0" />
-                      <div className="min-w-0 flex-1">
-                        <h3 className="font-medium text-sm truncate" title={file.original_filename}>
-                          {file.original_filename}
-                        </h3>
-                        <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-4 text-xs text-muted-foreground mt-1">
-                          <span>{formatFileSize(file.file_size)}</span>
-                          <span className="hidden sm:inline">{formatDate(file.created_at)}</span>
-                          <span className="sm:hidden">{formatDate(file.created_at).split(',')[0]}</span>
-                          {file.mime_type && <span className="hidden lg:inline truncate">{file.mime_type}</span>}
+            ) : (
+              <div className={viewMode === 'grid' ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3 sm:gap-4' : 'space-y-2'}>
+                {files.map((file) => (
+                  viewMode === 'grid' ? (
+                    <div key={file.id} className="border border-border rounded-lg p-3 sm:p-4 hover:bg-muted/50 transition-colors">
+                      <div className="flex items-start justify-between mb-3">
+                        <File className="h-6 w-6 sm:h-8 sm:w-8 text-primary flex-shrink-0" />
+                        <div className="flex space-x-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 sm:h-8 sm:w-8"
+                            onClick={() => handleDownload(file.id)}
+                          >
+                            <Download className="h-3 w-3 sm:h-4 sm:w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 sm:h-8 sm:w-8 text-destructive hover:text-destructive"
+                            onClick={() => handleDelete(file.id)}
+                          >
+                            <Trash2 className="h-3 w-3 sm:h-4 sm:w-4" />
+                          </Button>
                         </div>
                       </div>
+                      <div>
+                        <h3 className="font-medium text-xs sm:text-sm truncate" title={file.original_filename}>
+                          {file.original_filename}
+                        </h3>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {formatFileSize(file.file_size)}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {formatDate(file.created_at)}
+                        </p>
+                        {file.mime_type && (
+                          <p className="text-xs text-muted-foreground truncate">
+                            {file.mime_type}
+                          </p>
+                        )}
+                      </div>
                     </div>
-                    <div className="flex space-x-1 flex-shrink-0">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 sm:h-8 sm:w-8"
-                        onClick={() => handleDownload(file.id)}
-                      >
-                        <Download className="h-3 w-3 sm:h-4 sm:w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-7 w-7 sm:h-8 sm:w-8 text-destructive hover:text-destructive"
-                        onClick={() => handleDelete(file.id)}
-                      >
-                        <Trash2 className="h-3 w-3 sm:h-4 sm:w-4" />
-                      </Button>
+                  ) : (
+                    <div key={file.id} className="flex items-center justify-between p-3 border border-border rounded-lg hover:bg-muted/50 transition-colors">
+                      <div className="flex items-center space-x-3 min-w-0 flex-1">
+                        <File className="h-4 w-4 sm:h-5 sm:w-5 text-primary flex-shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <h3 className="font-medium text-sm truncate" title={file.original_filename}>
+                            {file.original_filename}
+                          </h3>
+                          <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-4 text-xs text-muted-foreground mt-1">
+                            <span>{formatFileSize(file.file_size)}</span>
+                            <span className="hidden sm:inline">{formatDate(file.created_at)}</span>
+                            <span className="sm:hidden">{formatDate(file.created_at).split(',')[0]}</span>
+                            {file.mime_type && <span className="hidden lg:inline truncate">{file.mime_type}</span>}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex space-x-1 flex-shrink-0">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
+                          onClick={() => handleDownload(file.id)}
+                        >
+                          <Download className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-destructive hover:text-destructive"
+                          onClick={() => handleDelete(file.id)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                )
-              ))}
-            </div>
+                  )
+                ))}
+              </div>
+            )
+          ) : (
+            trashFiles.length === 0 ? (
+              <div className="flex h-64 items-center justify-center border-2 border-dashed border-border rounded-lg">
+                <div className="text-center px-4">
+                  <Trash2 className="mx-auto h-12 w-12 text-muted-foreground" />
+                  <h3 className="mt-4 text-lg font-medium">Çöp kutusu boş</h3>
+                  <p className="mt-2 text-muted-foreground text-sm sm:text-base">
+                    Silinmiş dosyalar burada görünecek
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className={viewMode === 'grid' ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3 sm:gap-4' : 'space-y-2'}>
+                {trashFiles.map((file) => (
+                  viewMode === 'grid' ? (
+                    <div key={file.id} className="border border-border rounded-lg p-3 sm:p-4 hover:bg-muted/50 transition-colors">
+                      <div className="flex items-start justify-between mb-3">
+                        <File className="h-6 w-6 sm:h-8 sm:w-8 text-primary flex-shrink-0" />
+                        <div className="flex space-x-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 sm:h-8 sm:w-8 text-green-600 hover:text-green-700"
+                            onClick={() => handleRestore(file.id)}
+                            title="Geri yükle"
+                          >
+                            <RotateCcw className="h-3 w-3 sm:h-4 sm:w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 sm:h-8 sm:w-8 text-destructive hover:text-destructive"
+                            onClick={() => handlePermanentDelete(file.id)}
+                            title="Kalıcı olarak sil"
+                          >
+                            <Trash className="h-3 w-3 sm:h-4 sm:w-4" />
+                          </Button>
+                        </div>
+                      </div>
+                      <div>
+                        <h3 className="font-medium text-xs sm:text-sm truncate" title={file.original_filename}>
+                          {file.original_filename}
+                        </h3>
+                        <p className="text-xs text-muted-foreground mt-1">
+                          {formatFileSize(file.file_size)}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          Silinme: {file.deleted_at ? formatDate(file.deleted_at) : 'Bilinmiyor'}
+                        </p>
+                        {file.mime_type && (
+                          <p className="text-xs text-muted-foreground truncate">
+                            {file.mime_type}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                    <div key={file.id} className="flex items-center justify-between p-3 border border-border rounded-lg hover:bg-muted/50 transition-colors">
+                      <div className="flex items-center space-x-3 min-w-0 flex-1">
+                        <File className="h-4 w-4 sm:h-5 sm:w-5 text-primary flex-shrink-0" />
+                        <div className="min-w-0 flex-1">
+                          <h3 className="font-medium text-sm truncate" title={file.original_filename}>
+                            {file.original_filename}
+                          </h3>
+                          <div className="flex flex-col sm:flex-row sm:items-center sm:space-x-4 text-xs text-muted-foreground mt-1">
+                            <span>{formatFileSize(file.file_size)}</span>
+                            <span className="hidden sm:inline">Silinme: {file.deleted_at ? formatDate(file.deleted_at) : 'Bilinmiyor'}</span>
+                            <span className="sm:hidden">Silinme: {file.deleted_at ? formatDate(file.deleted_at).split(',')[0] : 'Bilinmiyor'}</span>
+                            {file.mime_type && <span className="hidden lg:inline truncate">{file.mime_type}</span>}
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex space-x-1 flex-shrink-0">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-green-600 hover:text-green-700"
+                          onClick={() => handleRestore(file.id)}
+                          title="Geri yükle"
+                        >
+                          <RotateCcw className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-destructive hover:text-destructive"
+                          onClick={() => handlePermanentDelete(file.id)}
+                          title="Kalıcı olarak sil"
+                        >
+                          <Trash className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+                  )
+                ))}
+              </div>
+            )
           )}
         </main>
       </div>

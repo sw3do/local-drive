@@ -24,6 +24,8 @@ pub struct FileInfo {
     pub disk_path: String,
     pub file_size: i64,
     pub mime_type: Option<String>,
+    pub is_deleted: bool,
+    pub deleted_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

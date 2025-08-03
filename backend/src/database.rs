@@ -35,10 +35,24 @@ pub async fn initialize_database(pool: &PgPool) -> anyhow::Result<()> {
             disk_path VARCHAR(500) NOT NULL,
             file_size BIGINT NOT NULL,
             mime_type VARCHAR(255),
+            is_deleted BOOLEAN DEFAULT FALSE,
+            deleted_at TIMESTAMP WITH TIME ZONE,
             created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
             updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
         )
         "#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "ALTER TABLE files ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE"
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "ALTER TABLE files ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP WITH TIME ZONE"
     )
     .execute(pool)
     .await?;
@@ -163,9 +177,9 @@ pub async fn create_file_record(
 ) -> anyhow::Result<FileInfo> {
     let file = sqlx::query_as::<_, FileInfo>(
         r#"
-        INSERT INTO files (user_id, filename, original_filename, file_path, disk_path, file_size, mime_type)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING id, user_id, filename, original_filename, file_path, disk_path, file_size, mime_type, created_at, updated_at
+        INSERT INTO files (user_id, filename, original_filename, file_path, disk_path, file_size, mime_type, is_deleted)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, FALSE)
+        RETURNING id, user_id, filename, original_filename, file_path, disk_path, file_size, mime_type, is_deleted, deleted_at, created_at, updated_at
         "#,
     )
     .bind(user_id)
@@ -185,7 +199,7 @@ pub async fn create_file_record(
 
 pub async fn get_file_by_id(pool: &PgPool, file_id: &Uuid) -> anyhow::Result<Option<FileInfo>> {
     let file = sqlx::query_as::<_, FileInfo>(
-        "SELECT id, user_id, filename, original_filename, file_path, disk_path, file_size, mime_type, created_at, updated_at FROM files WHERE id = $1",
+        "SELECT id, user_id, filename, original_filename, file_path, disk_path, file_size, mime_type, is_deleted, deleted_at, created_at, updated_at FROM files WHERE id = $1",
     )
     .bind(file_id)
     .fetch_optional(pool)
@@ -205,12 +219,40 @@ pub async fn delete_file_record(pool: &PgPool, file_id: &Uuid) -> anyhow::Result
 
 pub async fn get_all_files(pool: &PgPool) -> anyhow::Result<Vec<FileInfo>> {
     let files = sqlx::query_as::<_, FileInfo>(
-        "SELECT id, user_id, filename, original_filename, file_path, disk_path, file_size, mime_type, created_at, updated_at FROM files ORDER BY created_at DESC",
+        "SELECT id, user_id, filename, original_filename, file_path, disk_path, file_size, mime_type, is_deleted, deleted_at, created_at, updated_at FROM files WHERE is_deleted = FALSE ORDER BY created_at DESC",
     )
     .fetch_all(pool)
     .await?;
 
     Ok(files)
+}
+
+pub async fn get_deleted_files(pool: &PgPool) -> anyhow::Result<Vec<FileInfo>> {
+    let files = sqlx::query_as::<_, FileInfo>(
+        "SELECT id, user_id, filename, original_filename, file_path, disk_path, file_size, mime_type, is_deleted, deleted_at, created_at, updated_at FROM files WHERE is_deleted = TRUE ORDER BY deleted_at DESC",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    Ok(files)
+}
+
+pub async fn soft_delete_file(pool: &PgPool, file_id: &Uuid) -> anyhow::Result<()> {
+    sqlx::query("UPDATE files SET is_deleted = TRUE, deleted_at = NOW() WHERE id = $1")
+        .bind(file_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
+}
+
+pub async fn restore_file(pool: &PgPool, file_id: &Uuid) -> anyhow::Result<()> {
+    sqlx::query("UPDATE files SET is_deleted = FALSE, deleted_at = NULL WHERE id = $1")
+        .bind(file_id)
+        .execute(pool)
+        .await?;
+
+    Ok(())
 }
 
 

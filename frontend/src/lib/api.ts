@@ -61,6 +61,8 @@ export interface FileInfo {
   mime_type?: string;
   created_at: string;
   updated_at: string;
+  is_deleted: boolean;
+  deleted_at?: string;
 }
 
 export interface AuthResponse {
@@ -197,6 +199,22 @@ export const filesApi = {
 
   deleteFile: async (id: string) => {
     const response = await api.delete(`/files/${id}`);
+    return response.data;
+  },
+
+  // Trash bin functions
+  getTrashFiles: async (): Promise<FileInfo[]> => {
+    const response = await api.get('/trash');
+    return response.data;
+  },
+
+  restoreFile: async (id: string) => {
+    const response = await api.post(`/trash/${id}/restore`);
+    return response.data;
+  },
+
+  deleteFilePermanently: async (id: string) => {
+    const response = await api.delete(`/trash/${id}`);
     return response.data;
   },
 

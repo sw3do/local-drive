@@ -96,7 +96,10 @@ async fn main() -> anyhow::Result<()> {
     let protected_routes = Router::new()
         .route("/files", get(list_files))
         .route("/files/:id/download", get(download_file))
-        .route("/files/:id", delete(delete_file))
+        .route("/files/:id", delete(move_to_trash))
+        .route("/trash", get(list_trash_files))
+        .route("/trash/:id/restore", post(restore_file))
+        .route("/trash/:id", delete(delete_file_permanently))
         .route("/upload/initiate", post(initiate_chunked_upload))
         .route("/upload/:upload_id/chunk/:chunk_number", post(upload_chunk))
         .route("/upload/:upload_id/complete", post(complete_chunked_upload))
@@ -249,7 +252,38 @@ async fn download_file(
     Ok(response)
 }
 
-async fn delete_file(
+async fn move_to_trash(
+    Path(file_id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<StatusCode, StatusCode> {
+    database::soft_delete_file(&state.db, &file_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn list_trash_files(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<FileInfo>>, StatusCode> {
+    let files = database::get_deleted_files(&state.db)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok(Json(files))
+}
+
+async fn restore_file(
+    Path(file_id): Path<Uuid>,
+    State(state): State<AppState>,
+) -> Result<StatusCode, StatusCode> {
+    database::restore_file(&state.db, &file_id)
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_file_permanently(
     Path(file_id): Path<Uuid>,
     State(state): State<AppState>,
 ) -> Result<StatusCode, StatusCode> {
@@ -257,6 +291,10 @@ async fn delete_file(
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
+
+    if !file.is_deleted {
+        return Err(StatusCode::BAD_REQUEST);
+    }
 
     state.file_storage.delete_file(&file.file_path)
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
